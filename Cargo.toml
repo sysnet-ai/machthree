@@ -1,0 +1,8 @@
+[package]
+name = "machthree"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hecs = { version = "0.7.5", features = ["macros"] }
+rand = "0.3"
