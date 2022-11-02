@@ -1,156 +1,26 @@
 use std::collections::{HashSet};
-use std::ops::{BitAnd, BitOr};
+use log::{warn, info, debug};
 
 #[path = "conf_random.rs"]
 mod conf_random;
 
-#[derive(Copy, Clone, Debug, Default)]
-struct TileMask(u64);
-impl BitAnd for TileMask
-{
-    type Output = Self;
-    fn bitand(self, Self(rhs): Self) -> Self::Output
-    {
-        return TileMask( self.0 & rhs )
-    }
-}
+mod board;
+use board::*;
 
-impl BitOr for TileMask
-{
-    type Output = Self;
-    fn bitor(self, Self(rhs): Self) -> Self::Output
-    {
-        return TileMask( self.0 | rhs )
-    }
-}
+mod tiles;
+use tiles::*;
 
-#[derive(Copy, Clone, Debug, Default)]
-struct TileData
-{
-    mask: TileMask,
-    health: usize
-}
+mod gravity;
+use gravity::*;
 
-impl TileData
-{
-    fn empty() -> Self
-    {
-        Self::new(0,0)
-    }
-    fn new(mask: u64, health: usize) -> Self
-    {
-        Self { mask: TileMask(mask), health }
-    }
-    fn tiles_match(tile_a: &Self, tile_b: &Self) -> bool
-    {
-        (tile_a.mask & tile_b.mask).0 != 0
-    }
-    fn clear(&mut self)
-    {
-        self.mask = TileMask(0);
-        self.health = 0;
-    }
-    fn is_empty(&self) -> bool
-    {
-        self.mask.0 & 0xFFFFFFFF == 0 //TODO: Better ways of representing 'ALL MASKS'
-    }
-}
-
-impl std::fmt::Display for TileData
-{
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result
-    {
-        formatter.write_str( &self.mask.0.to_string() )
-    }
-}
-
-type BoardPosition = (usize, usize);
-pub type MatchResult = Option<Match>;
-
-struct Goal;
-struct Game
+pub struct Game
 {
     board: Board,
     matchers: Vec<Box<dyn Matcher>>,
     processors: Vec<Box<dyn MatchProcessor>>,
 }
-#[derive(Debug)]
-struct Board
-{
-    tiles: Vec<TileData>,
-    dimensions: (usize, usize)
-}
 
-impl std::fmt::Display for Board
-{
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result
-    {
-        /*
-        match self
-        {
-            Error::CustomError(m) => formatter.write_str(m),
-            _ => formatter.write_str(&self.to_string())
-        }
-        */
-
-        for row in (0..self.height())
-        {
-            for col in (0..self.width())
-            {
-                let td = self.get_tile(&(col, row)); 
-                formatter.write_fmt(format_args!("|{}|", td));
-            }
-            formatter.write_str("\n");
-            for col in (0..self.width())
-            {
-                formatter.write_str("---");
-            }
-            formatter.write_str("\n");
-        }
-        return std::fmt::Result::Ok(())
-    }
-}
-
-impl Board
-{
-    fn new(dimensions: (usize, usize)) -> Self
-    {
-        let mut t = Vec::new();
-        t.resize(dimensions.0 * dimensions.1, TileData::empty());
-        Self { tiles: t, dimensions }
-    }
-
-    fn width(&self) -> usize
-    {
-        self.dimensions.0
-    }
-
-    fn height(&self) -> usize
-    {
-        self.dimensions.1
-    }
-
-    fn get_tile<'a>(&'a self, at: &BoardPosition) -> &'a TileData
-    {
-        let (x, y) = (at.0, at.1);
-        &self.tiles[y * self.width() + x]
-    }
-
-    fn get_tile_mut<'a>(&'a mut self, at: &BoardPosition) -> &'a mut TileData
-    {
-        let (x, y) = (at.0, at.1);
-        let inx = y * self.width() + x;
-        &mut self.tiles[inx]
-    }
-
-    fn set_tile(&mut self, tile: TileData, at: &BoardPosition)
-    {
-        let (x, y) = (at.0, at.1);
-        let inx = y * self.width() + x;
-        self.tiles[inx] = tile;
-    }
-}
-
+pub type MatchResult = Option<Match>;
 trait Matcher
 {
     fn find_match(&mut self, board: &Board, from: &BoardPosition) -> MatchResult;
@@ -352,6 +222,7 @@ impl MatchDetector
             }
         }
 
+        debug!("Matches in \n{}\n\n{:?}", board, matches);
         matches
     }
 }
@@ -449,6 +320,8 @@ impl EventProcessor
         let mut to_ret = vec![];
         for evt in events
         {
+
+            debug!("Board Before Processing Event {:?}:\n{}", evt, board);
             match evt
             {
                 GameEvent::EventContainer { contained } =>
@@ -481,6 +354,7 @@ impl EventProcessor
                 },
                 _ => {}
             }
+            debug!("Board After Processing Event {:?}:\n{}", evt, board);
         }
         to_ret
     }
@@ -518,18 +392,17 @@ impl SpawnProbabilityTable
 
     pub fn generate_tile_data(&self, roll: f32) -> TileData
     {
-        //print!("ROLLED: {:?} ", roll);
+        let mut res = self.default_tile;
         for (range, td) in &self.table
         {
             if roll > range.0 && roll < range.1
             {
-                //println!("SPAWNED {:?}", *td);
-                return *td;
+                res = *td;
             }
         }
 
-        //println!("SPAWNED {:?}", self.default_tile);
-        return self.default_tile; 
+        debug!("Generated New Tile From: {:?} - {}", roll, res);
+        return res; 
     }
 }
 
@@ -550,6 +423,7 @@ impl <'a> BoardFiller<'a>
     // TODO: Is this just a factory with a different name?
     pub fn fill_board(&mut self, board: &mut Board) -> GameEvent 
     {
+        debug!("BOARD FILL: Before Filling \n{}", board);
         let mut spawned = vec![];
 
         // Always fill top to bottom, left to right
@@ -557,7 +431,7 @@ impl <'a> BoardFiller<'a>
         {
             for col in 0..board.width()
             {
-                if board.get_tile(&(col ,row)).health > 0 // TODO: How do you tell it's empty?
+                if !board.get_tile(&(col ,row)).is_empty()
                 {
                     continue;
                 }
@@ -568,80 +442,12 @@ impl <'a> BoardFiller<'a>
             }
         }
 
+        debug!("BOARD FILL: After Filling \n{}", board);
         GameEvent::EventContainer { contained: spawned } 
     }
 }
 
-struct GravitySystem
-{
-    direction: u8
-}
 
-impl GravitySystem
-{
-    pub fn new() -> Self
-    {
-        Self { direction: 0 } //TODO: Direction is probably a top level type or Enum
-    }
-
-    pub fn apply_gravity(&self, board: &mut Board)
-    {
-        //TODO: This could change drastically when directions become a thing,
-        //      Assume gravity always goes down for now
-        for col in (0..board.width())
-        {
-            let mut start:isize =  0;
-            let mut end:isize = -1;
-            for row in (0..board.height()).rev()
-            {
-                let td = board.get_tile(&(col, row)); 
-                if td.is_empty() && start == 0
-                {
-                    start = row.try_into().unwrap();
-                }
-                
-                if !td.is_empty() && start != 0 && end == -1
-                {
-                    end = row.try_into().unwrap();
-                }
-            }
-
-            println!("Found start {} and end {}", start, end);
-
-            if start > 0 && end > -1
-            {
-                let offset:usize = (start - end).try_into().unwrap();  
-                let ustart:usize = start.try_into().unwrap(); // Are all of these really necessary :/ ?
-
-                for r in (0..ustart+1).rev()
-                {
-                    println!("{}", r);
-                    if offset > r
-                    {
-                        println!("Breaking due to {} > {}", offset, r);
-                        break;
-                    }
-
-                    let p1 = (col, r - offset);
-                    let p2 = (col, r);
-
-                    let old = 
-                    {
-                        let old = board.get_tile_mut(&p1);
-                        let copy = *old;
-                        old.clear();
-                        copy
-                    };
-
-
-                    board.set_tile(old, &p2);
-                    println!("Swapped {:?} with {:?}", p1, p2);
-                }
-            }
-        }
-        
-    }
-}
 
 fn main()
 {
@@ -651,10 +457,12 @@ fn main()
 mod test
 {
     use super::*;
+    use env_logger;
 
     #[test]
     fn test()
     {
+        let _ = env_logger::builder().is_test(true).try_init();
         let mut board = Board::new((4, 4));
         let q = MatchDetector::detect_matches(&board, &mut vec![Box::new(HorizontalMatcher::new(3))]);
 
@@ -738,8 +546,6 @@ mod test
             vec![]
         };
 
-        println!("{}", board);
-
         // The events generated by those matches would be processed
         while !evts.is_empty()
         {
@@ -752,24 +558,19 @@ mod test
         let mut rng_ctx = conf_random::RandomCtx::from_seed([101, 203, 1414, 3141], "Name".to_string()); 
         let mut filler = BoardFiller::new(&mut prob_table, &mut rng_ctx);
 
-        println!("{}", board);
-
         let mut gravity = GravitySystem::new();
-
         gravity.apply_gravity(&mut board);
-        println!("{}", board);
 
         filler.fill_board(&mut board);
 
+        println!("Condensed...");
         // Condensed 
         let mut matchers: Vec<Box<dyn Matcher>> = vec![Box::new(TMatcher::new(3)), Box::new(HorizontalMatcher::new(3)), Box::new(VerticalMatcher::new(3))];
         loop
         {
-            println!("{}", board);
             // Match Phase
             let all_matches = MatchDetector::detect_matches(&board, &mut matchers);
             let omp = OnMatchProcessor{};
-
 
             // Process Match Events Phase
             let mut evts = if let GameEvent::EventContainer { contained: evctr_evts } = omp.process_matches(&mut board, &all_matches)
@@ -788,6 +589,7 @@ mod test
             }
 
             // Gravity Phase
+            gravity.apply_gravity(&mut board);
 
             // Spawn Phase 
             let evts = if let GameEvent::EventContainer { contained: evctr_evts } = filler.fill_board(& mut board)
@@ -805,6 +607,6 @@ mod test
             }
         }
 
-        assert!(evts.len() == 1, "{:?}", evts);
+        assert!(evts.len() == 0, "{:?}", evts);
     }
 }

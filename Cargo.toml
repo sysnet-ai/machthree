@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 hecs = { version = "0.7.5", features = ["macros"] }
 rand = "0.3"
+log = "*"
+
+[dev-dependencies]
+env_logger = "*"
